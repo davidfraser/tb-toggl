@@ -34,7 +34,7 @@ def get_project(sheet_name, tags):
     if sheet_name in pid_by_name:
         return pid_by_name[sheet_name]
 
-def to_toggl(session, date_start, date_end):
+def send_to_toggl(session, date_start, date_end):
     q = session.query(entry)
     if date_start:
         q = q.filter(entry.end_time >= totimestamp(date_start))
@@ -64,6 +64,41 @@ def to_toggl(session, date_start, date_end):
         session.add(new_map)
         session.commit()
 
+def resync_to_toggl(session, date_start, date_end):
+    q = session.query(entry, toggl_id_map)
+    if date_start:
+        q = q.filter(entry.end_time >= totimestamp(date_start))
+    if date_end:
+        q = q.filter(entry.start_time <= totimestamp(date_end))
+    synced_entries = session.query(toggl_id_map.entry_id)
+    q = q.filter(entry.id.in_(synced_entries))
+    time_entries = toggl_api.time_entries()
+    for result in q:
+        e = result.entry
+        e_map = result.toggl_id_map
+        fd = lambda d: arrow.get(d).to('utc').isoformat()
+        tags = [w for w in e.description.split() if w and w[0] in '+@']
+        pid = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
+        if pid is None:
+            logging.warning("Could not work out project name for %s", e.description)
+            continue
+        data_to_toggl = {'description': e.description, 'pid': pid, 'created_with': 'tb-toggl',
+                         'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds,
+                         'tags': tags, 'id': e_map.toggl_id}
+        print(data_to_toggl)
+        print(e_map)
+        try:
+            toggl_dict = toggl_api.time_entries(id=e_map.toggl_id).put(data={'time_entry': data_to_toggl}).data()._data
+        except Exception, error:
+            logging.error("Error synchronizing: %s with data %r", error, data_to_toggl)
+            continue
+        toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
+        if toggl_id != e_map.toggl_id:
+            logging.warning("map mismatch: %r %r", toggl_dict, e_map)
+        else:
+            e_map.toggl_at = toggl_at
+        session.commit()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timebook", action="store_true", default=DEFAULTS["timebook"])
@@ -73,7 +108,7 @@ def main():
     Base.metadata.create_all(engine)
     session_class = orm.sessionmaker(bind=engine)
     session = session_class()
-    to_toggl(session, arrow.utcnow().replace(days=-7), arrow.utcnow())
+    resync_to_toggl(session, arrow.utcnow().replace(days=-7), arrow.utcnow())
 
 if __name__ == '__main__':
     main()
