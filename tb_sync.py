@@ -104,7 +104,7 @@ def main():
     Base.metadata.create_all(engine)
     session_class = orm.sessionmaker(bind=engine)
     session = session_class()
-    resync_to_toggl(session, (datetime.now() - timedelta(days=7)).replace(tzinfo=localtz), datetime.now().replace(tzinfo=localtz))
+    sync_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=7)), localtz.localize(datetime.now()))
 
 if __name__ == '__main__':
     main()
