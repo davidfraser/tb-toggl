@@ -39,11 +39,15 @@ def send_to_toggl(session, date_start, date_end):
         q = q.filter(entry.start_time <= totimestamp(date_end))
     synced_entries = session.query(toggl_id_map.entry_id)
     q = q.filter(~entry.id.in_(synced_entries))
+    q = q.order_by(sqlalchemy.desc(entry.start_time))
     for e in q:
+        if e.description is None:
+            logging.warning("Entry id %s from %s to %s has no description: not adding", e.id, e.start, e.end)
+            continue
         tags = [w for w in e.description.split() if w and w[0] in '+@']
         project = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
         if project is None:
-            logging.warning("Could not work out project name for %s: not adding", e.description)
+            logging.warning("Could not work out project name for id %s (%s to %s) - description %s: not adding", e.id, e.start, e.end, e.description)
             continue
         toggl_data = {'description': e.description, 'pid': project['id'], 'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds, 'tags': tags}
         toggl_entry = toggl.TimeEntry(data_dict=toggl_data)
@@ -58,7 +62,7 @@ def send_to_toggl(session, date_start, date_end):
         new_map = toggl_id_map(entry_id=e.id, toggl_id=toggl_id, toggl_at=toggl_at)
         session.add(new_map)
         session.commit()
-        logging.info("Mapped entry %s to toggl id %s: %s", e.id, toggl_id, e.description)
+        logging.info("Mapped entry %s (%s to %s) to toggl id %s: %s", e.id, e.start, e.end, toggl_id, e.description)
 
 def resync_to_toggl(session, date_start, date_end):
     q = session.query(entry, toggl_id_map)
@@ -67,6 +71,7 @@ def resync_to_toggl(session, date_start, date_end):
     if date_end:
         q = q.filter(entry.start_time <= totimestamp(date_end))
     q = q.filter(entry.id == toggl_id_map.entry_id)
+    q = q.order_by(sqlalchemy.desc(entry.start_time))
     for result in q:
         e = result.entry
         e_map = result.toggl_id_map
@@ -83,7 +88,7 @@ def resync_to_toggl(session, date_start, date_end):
         try:
             r = toggl.toggl("%s/time_entries/%s" % (toggl.TOGGL_URL, toggl_entry.data['id']), 'put', data=toggl_entry.json())
         except Exception, error:
-            logging.error("Error synchronizing: %s with data %r", error, data_to_toggl)
+            logging.error("Error synchronizing: %s with data %r", error, toggl_data)
             continue
         toggl_dict = json.loads(r)["data"]
         toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
@@ -91,11 +96,12 @@ def resync_to_toggl(session, date_start, date_end):
             logging.warning("map mismatch: %r %r", toggl_dict, e_map)
         else:
             e_map.toggl_at = toggl_at
-            logging.info("Updated toggl id %s from entry %s at %s", toggl_id, e.id, toggl_at)
+            logging.info("Updated toggl id %s from entry %s (%s to %s) at %s: %s", toggl_id, e.id, toggl_at, e.start, e.end, e.description)
         session.commit()
 
 def main():
     logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger("requests").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser()
     parser.add_argument("--timebook", action="store_true", default=DEFAULTS["timebook"])
     options = parser.parse_args()
@@ -104,7 +110,8 @@ def main():
     Base.metadata.create_all(engine)
     session_class = orm.sessionmaker(bind=engine)
     session = session_class()
-    sync_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=7)), localtz.localize(datetime.now()))
+    # resync_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=2)), localtz.localize(datetime.now()))
+    send_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=720)), localtz.localize(datetime.now()))
 
 if __name__ == '__main__':
     main()
