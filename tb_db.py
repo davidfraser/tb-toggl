@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from arrow import arrow
+from datetime import datetime, timedelta
 import time
 import user
 
@@ -24,7 +24,7 @@ class entry(Base):
 
     @property
     def start(self):
-        return arrow.datetime.fromtimestamp(self.start_time)
+        return datetime.fromtimestamp(self.start_time)
 
     @start.setter
     def set_start(self, new_start):
@@ -32,7 +32,7 @@ class entry(Base):
 
     @property
     def end(self):
-        return arrow.datetime.fromtimestamp(self.end_time)
+        return datetime.fromtimestamp(self.end_time)
 
     @end.setter
     def set_end(self, new_end):
@@ -40,7 +40,7 @@ class entry(Base):
 
     @property
     def duration(self):
-        return arrow.timedelta(seconds=(self.end_time-self.start_time))
+        return timedelta(seconds=(self.end_time-self.start_time))
 
 class toggl_id_map(Base):
     __tablename__ = "toggl_id_map"
@@ -51,7 +51,7 @@ class toggl_id_map(Base):
 
     @property
     def toggl_at_date(self):
-        return arrow.datetime.fromtimestamp(self.toggl_at)
+        return datetime.fromtimestamp(self.toggl_at)
 
     @toggl_at_date.setter
     def toggl_at_date(self, new_at):

@@ -1,2 +1,3 @@
 sqlalchemy
+pytz
 # toggl-cli (not packaged)

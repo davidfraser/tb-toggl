@@ -4,16 +4,20 @@ from tb_db import *
 import argparse
 import os
 import locale
-import arrow
+from datetime import datetime, timedelta
 import toggl
 import ConfigParser
 import logging
 import json
+import pytz
 
 tb_confdir = os.path.expanduser(os.path.join('~', '.config', 'timebook'))
 DEFAULTS = {'config': os.path.join(tb_confdir, 'timebook.ini'),
             'timebook': os.path.join(tb_confdir, 'sheets.db'),
             'encoding': locale.getpreferredencoding()}
+
+UTC = pytz.timezone("UTC")
+localtz = toggl.DateAndTime().tz
 
 def get_project(sheet_name, tags):
     project_list = toggl.ProjectList()
@@ -21,6 +25,11 @@ def get_project(sheet_name, tags):
     for possible_project in ['%s-%s' % (sheet_name, tag) for tag in tags] + ['%s-misc' % sheet_name, sheet_name]:
         if possible_project in projects:
             return projects[possible_project]
+
+def fd(d):
+    """formats a date in the local timezone in isoformat"""
+    d = localtz.localize(d)
+    return d.isoformat()
 
 def send_to_toggl(session, date_start, date_end):
     q = session.query(entry)
@@ -31,7 +40,6 @@ def send_to_toggl(session, date_start, date_end):
     synced_entries = session.query(toggl_id_map.entry_id)
     q = q.filter(~entry.id.in_(synced_entries))
     for e in q:
-        fd = lambda d: arrow.get(d).to('utc').isoformat()
         tags = [w for w in e.description.split() if w and w[0] in '+@']
         project = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
         if project is None:
@@ -62,7 +70,6 @@ def resync_to_toggl(session, date_start, date_end):
     for result in q:
         e = result.entry
         e_map = result.toggl_id_map
-        fd = lambda d: arrow.get(d).to('utc').isoformat()
         tags = [w for w in e.description.split() if w and w[0] in '+@']
         project = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
         if project is None:
@@ -97,7 +104,7 @@ def main():
     Base.metadata.create_all(engine)
     session_class = orm.sessionmaker(bind=engine)
     session = session_class()
-    resync_to_toggl(session, arrow.utcnow().replace(days=-7), arrow.utcnow())
+    resync_to_toggl(session, (datetime.now() - timedelta(days=7)).replace(tzinfo=localtz), datetime.now().replace(tzinfo=localtz))
 
 if __name__ == '__main__':
     main()
