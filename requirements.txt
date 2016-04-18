@@ -1,2 +1,2 @@
-tapioca-toggl
 sqlalchemy
+# toggl-cli (not packaged)

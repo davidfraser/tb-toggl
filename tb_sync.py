@@ -5,34 +5,22 @@ import argparse
 import os
 import locale
 import arrow
-import tapioca_toggl
+import toggl
 import ConfigParser
 import logging
+import json
 
 tb_confdir = os.path.expanduser(os.path.join('~', '.config', 'timebook'))
 DEFAULTS = {'config': os.path.join(tb_confdir, 'timebook.ini'),
             'timebook': os.path.join(tb_confdir, 'sheets.db'),
             'encoding': locale.getpreferredencoding()}
 
-toggl_conf_file = os.path.expanduser(os.path.join('~', '.togglrc'))
-toggl_conf = ConfigParser.RawConfigParser()
-toggl_conf.read(toggl_conf_file)
-
-toggl_api = tapioca_toggl.Toggl(access_token=toggl_conf.get('auth', 'api_token'))
-me = toggl_api.me_with_related_data().get()
-toggl_tz = me.data.timezone().data
-
-pid_by_name = {project.name().data: project.id().data for project in me.data.projects}
-
 def get_project(sheet_name, tags):
-    for tag in sorted(tags):
-        possible_project = '%s-%s' % (sheet_name, tag)
-        if possible_project in pid_by_name:
-            return pid_by_name[possible_project]
-    if sheet_name + '-misc' in pid_by_name:
-        return pid_by_name['%s-misc' % sheet_name]
-    if sheet_name in pid_by_name:
-        return pid_by_name[sheet_name]
+    project_list = toggl.ProjectList()
+    projects = {project['name']: project for project in project_list}
+    for possible_project in ['%s-%s' % (sheet_name, tag) for tag in tags] + ['%s-misc' % sheet_name, sheet_name]:
+        if possible_project in projects:
+            return projects[possible_project]
 
 def send_to_toggl(session, date_start, date_end):
     q = session.query(entry)
@@ -42,27 +30,27 @@ def send_to_toggl(session, date_start, date_end):
         q = q.filter(entry.start_time <= totimestamp(date_end))
     synced_entries = session.query(toggl_id_map.entry_id)
     q = q.filter(~entry.id.in_(synced_entries))
-    time_entries = toggl_api.time_entries()
     for e in q:
         fd = lambda d: arrow.get(d).to('utc').isoformat()
         tags = [w for w in e.description.split() if w and w[0] in '+@']
-        pid = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
-        if pid is None:
-            logging.warning("Could not work out project name for %s", e.description)
+        project = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
+        if project is None:
+            logging.warning("Could not work out project name for %s: not adding", e.description)
             continue
-        data_to_toggl = {'description': e.description, 'pid': pid, 'created_with': 'tb-toggl',
-                         'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds,
-                         'tags': tags}
-        print(data_to_toggl)
+        toggl_data = {'description': e.description, 'pid': project['id'], 'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds, 'tags': tags}
+        toggl_entry = toggl.TimeEntry(data_dict=toggl_data)
+        toggl_entry.data['create_with'] = 'tb-toggl'
         try:
-            toggl_dict = time_entries.post(data={'time_entry': data_to_toggl}).data()._data
+            r = toggl_entry.add()
         except Exception, error:
             logging.error("Error synchronizing: %s with data %r", error, data_to_toggl)
             continue
+        toggl_dict = json.loads(r)["data"]
         toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
         new_map = toggl_id_map(entry_id=e.id, toggl_id=toggl_id, toggl_at=toggl_at)
         session.add(new_map)
         session.commit()
+        logging.info("Mapped entry %s to toggl id %s: %s", e.id, toggl_id, e.description)
 
 def resync_to_toggl(session, date_start, date_end):
     q = session.query(entry, toggl_id_map)
@@ -70,36 +58,37 @@ def resync_to_toggl(session, date_start, date_end):
         q = q.filter(entry.end_time >= totimestamp(date_start))
     if date_end:
         q = q.filter(entry.start_time <= totimestamp(date_end))
-    synced_entries = session.query(toggl_id_map.entry_id)
-    q = q.filter(entry.id.in_(synced_entries))
-    time_entries = toggl_api.time_entries()
+    q = q.filter(entry.id == toggl_id_map.entry_id)
     for result in q:
         e = result.entry
         e_map = result.toggl_id_map
         fd = lambda d: arrow.get(d).to('utc').isoformat()
         tags = [w for w in e.description.split() if w and w[0] in '+@']
-        pid = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
-        if pid is None:
-            logging.warning("Could not work out project name for %s", e.description)
+        project = get_project(e.sheet, [tag[1:] for tag in tags if tag.startswith('+')])
+        if project is None:
+            logging.warning("Could not work out project name for %s: not updating", e.description)
             continue
-        data_to_toggl = {'description': e.description, 'pid': pid, 'created_with': 'tb-toggl',
-                         'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds,
-                         'tags': tags, 'id': e_map.toggl_id}
-        print(data_to_toggl)
-        print(e_map)
+        toggl_data = {'description': e.description, 'pid': project['id'], 'created_with': 'tb-toggl',
+                      'start': fd(e.start), 'stop': fd(e.end), 'duration': e.duration.seconds,
+                      'tags': tags, 'id': e_map.toggl_id}
+        toggl_entry = toggl.TimeEntry(data_dict=toggl_data)
+        toggl_entry.data['create_with'] = 'tb-toggl'
         try:
-            toggl_dict = toggl_api.time_entries(id=e_map.toggl_id).put(data={'time_entry': data_to_toggl}).data()._data
+            r = toggl.toggl("%s/time_entries/%s" % (toggl.TOGGL_URL, toggl_entry.data['id']), 'put', data=toggl_entry.json())
         except Exception, error:
             logging.error("Error synchronizing: %s with data %r", error, data_to_toggl)
             continue
+        toggl_dict = json.loads(r)["data"]
         toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
         if toggl_id != e_map.toggl_id:
             logging.warning("map mismatch: %r %r", toggl_dict, e_map)
         else:
             e_map.toggl_at = toggl_at
+            logging.info("Updated toggl id %s from entry %s at %s", toggl_id, e.id, toggl_at)
         session.commit()
 
 def main():
+    logging.getLogger().setLevel(logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--timebook", action="store_true", default=DEFAULTS["timebook"])
     options = parser.parse_args()
