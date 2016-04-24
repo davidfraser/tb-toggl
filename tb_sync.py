@@ -6,7 +6,6 @@ import os
 import locale
 from datetime import datetime, timedelta
 import toggl
-import ConfigParser
 import logging
 import json
 import pytz
@@ -55,7 +54,7 @@ def send_to_toggl(session, date_start, date_end):
         try:
             r = toggl_entry.add()
         except Exception, error:
-            logging.error("Error synchronizing: %s with data %r", error, data_to_toggl)
+            logging.error("Error synchronizing: %s with data %r", error, toggl_data)
             continue
         toggl_dict = json.loads(r)["data"]
         toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
@@ -111,7 +110,7 @@ def main():
     session_class = orm.sessionmaker(bind=engine)
     session = session_class()
     # resync_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=2)), localtz.localize(datetime.now()))
-    send_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=720)), localtz.localize(datetime.now()))
+    send_to_toggl(session, localtz.localize(datetime.now() - timedelta(days=7200)), localtz.localize(datetime.now()))
 
 if __name__ == '__main__':
     main()
