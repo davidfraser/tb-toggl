@@ -95,7 +95,7 @@ def resync_to_toggl(session, date_start, date_end):
             logging.warning("map mismatch: %r %r", toggl_dict, e_map)
         else:
             e_map.toggl_at = toggl_at
-            logging.info("Updated toggl id %s from entry %s (%s to %s) at %s: %s", toggl_id, e.id, toggl_at, e.start, e.end, e.description)
+            logging.info("Updated toggl id %s from entry %s (%s to %s) at %s: %s", toggl_id, e.id, e.start, e.end, toggl_at, e.description)
         session.commit()
 
 def main():
