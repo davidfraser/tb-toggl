@@ -56,6 +56,9 @@ def send_to_toggl(session, date_start, date_end):
         except Exception, error:
             logging.error("Error synchronizing: %s with data %r", error, toggl_data)
             continue
+        if r is None:
+            logging.error("Error adding (None returned): %r", toggl_data)
+            continue
         toggl_dict = json.loads(r)["data"]
         toggl_id, toggl_at = toggl_dict['id'], toggl_dict['at']
         new_map = toggl_id_map(entry_id=e.id, toggl_id=toggl_id, toggl_at=toggl_at)
